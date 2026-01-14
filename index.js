@@ -23,8 +23,6 @@ const TMDB = axios.create({
 /* ---------------- AI RECOMMEND ---------------- */
 app.post("/recommend", async (req, res) => {
   try {
-    console.log("📥 Prompt received:", req.body.prompt);
-
     const aiPrompt = `
 Suggest 5 movies for this request.
 Return ONLY a JSON array.
@@ -40,28 +38,51 @@ Request: ${req.body.prompt}
       input: aiPrompt,
     });
 
-    // 🔥 LOG EVERYTHING
-    console.log("🧠 FULL AI RESPONSE:");
-    console.dir(aiResponse, { depth: null });
+    const rawText =
+      aiResponse.output?.[0]?.content?.[0]?.text || "";
 
-    const message =
-      aiResponse.output?.[0]?.content?.[0]?.text;
+    const cleanJson = rawText
+      .replace(/```json/g, "")
+      .replace(/```/g, "")
+      .trim();
 
-    console.log("🧠 EXTRACTED TEXT:", message);
+    const aiMovies = JSON.parse(cleanJson);
 
-    if (!message) {
-      return res.status(500).json({
-        error: "No AI text output",
-        raw: aiResponse,
-      });
-    }
+    // enrich via TMDB
+    const enriched = await Promise.all(
+      aiMovies.map(async (movie) => {
+        try {
+          const tmdbRes = await TMDB.get("/search/movie", {
+            params: { query: movie.title },
+          });
 
-    const aiMovies = JSON.parse(message);
+          const tmdbMovie = tmdbRes.data.results[0];
 
-    res.json({ results: aiMovies });
+          return {
+            id: tmdbMovie?.id || movie.title,
+            title: movie.title,
+            overview: movie.overview,
+            poster_path: tmdbMovie?.poster_path || null,
+            vote_average: tmdbMovie?.vote_average || null,
+            release_date: tmdbMovie?.release_date || null,
+          };
+        } catch {
+          return {
+            id: movie.title,
+            title: movie.title,
+            overview: movie.overview,
+            poster_path: null,
+            vote_average: null,
+            release_date: null,
+          };
+        }
+      })
+    );
+
+    res.json({ results: enriched });
   } catch (err) {
-    console.error("❌ AI ERROR:", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("AI recommend error:", err.message);
+    res.status(500).json({ results: [] });
   }
 });
 

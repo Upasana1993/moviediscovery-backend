@@ -23,34 +23,34 @@ const TMDB = axios.create({
 /* ---------------- AI RECOMMEND ---------------- */
 app.post("/recommend", async (req, res) => {
   try {
-    const aiPrompt = `
-Return ONLY a JSON array of 8 movie titles.
-No markdown. No explanation.
-Prompt: ${req.body.prompt}
+    const prompt = `
+Return ONLY a valid JSON array.
+No markdown. No backticks.
+Each object must have:
+title, overview, poster_path (string or null), vote_average (number).
+
+User prompt: ${req.body.prompt}
 `;
 
-    const ai = await openai.responses.create({
+    const response = await openai.responses.create({
       model: "gpt-4o-mini",
-      input: aiPrompt,
+      input: prompt,
     });
 
-    const titles = JSON.parse(ai.output_text);
+    let text =
+      response.output_text ||
+      response.output?.[0]?.content?.[0]?.text ||
+      "";
 
-    // Search TMDB for each title
-    const results = [];
-    for (const title of titles) {
-      const search = await TMDB.get("/search/movie", {
-        params: { query: title },
-      });
-      if (search.data.results.length > 0) {
-        results.push(search.data.results[0]);
-      }
-    }
+    // 🔥 STRIP ```json ``` WRAPPERS (CRITICAL)
+    text = text.replace(/```json|```/g, "").trim();
 
-    res.json({ results });
+    const movies = JSON.parse(text);
+
+    res.json(movies);
   } catch (err) {
-    console.error("AI error:", err.message);
-    res.status(500).json({ results: [] });
+    console.error("AI ERROR:", err.message);
+    res.json([]); // ALWAYS return array
   }
 });
 

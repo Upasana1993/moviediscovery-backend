@@ -25,7 +25,7 @@ app.post("/recommend", async (req, res) => {
   try {
     const aiPrompt = `
 Suggest 8 movies for this request.
-Return ONLY valid JSON array.
+Return ONLY a valid JSON array.
 Each item must contain:
 - title
 - overview
@@ -38,10 +38,16 @@ Request: ${req.body.prompt}
       input: aiPrompt,
     });
 
-    // Parse AI response
-    const aiMovies = JSON.parse(aiResponse.output_text);
+    // ✅ SAFE extraction
+    const message =
+      aiResponse.output?.[0]?.content?.[0]?.text;
 
-    // Enrich with TMDB data
+    if (!message) {
+      throw new Error("No AI output received");
+    }
+
+    const aiMovies = JSON.parse(message);
+
     const enrichedMovies = await Promise.all(
       aiMovies.map(async (movie) => {
         try {
@@ -74,7 +80,7 @@ Request: ${req.body.prompt}
 
     res.json({ results: enrichedMovies });
   } catch (err) {
-    console.error("AI recommend error:", err);
+    console.error("AI recommend error:", err.message);
     res.status(500).json({ results: [] });
   }
 });

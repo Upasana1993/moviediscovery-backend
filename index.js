@@ -23,34 +23,59 @@ const TMDB = axios.create({
 /* ---------------- AI RECOMMEND ---------------- */
 app.post("/recommend", async (req, res) => {
   try {
-    const prompt = `
-Return ONLY a valid JSON array.
-No markdown. No backticks.
-Each object must have:
-title, overview, poster_path (string or null), vote_average (number).
+    const aiPrompt = `
+Suggest 8 movies for this request.
+Return ONLY valid JSON array.
+Each item must contain:
+- title
+- overview
 
-User prompt: ${req.body.prompt}
+Request: ${req.body.prompt}
 `;
 
-    const response = await openai.responses.create({
+    const aiResponse = await openai.responses.create({
       model: "gpt-4o-mini",
-      input: prompt,
+      input: aiPrompt,
     });
 
-    let text =
-      response.output_text ||
-      response.output?.[0]?.content?.[0]?.text ||
-      "";
+    // Parse AI response
+    const aiMovies = JSON.parse(aiResponse.output_text);
 
-    // 🔥 STRIP ```json ``` WRAPPERS (CRITICAL)
-    text = text.replace(/```json|```/g, "").trim();
+    // Enrich with TMDB data
+    const enrichedMovies = await Promise.all(
+      aiMovies.map(async (movie) => {
+        try {
+          const tmdbRes = await TMDB.get("/search/movie", {
+            params: { query: movie.title },
+          });
 
-    const movies = JSON.parse(text);
+          const tmdbMovie = tmdbRes.data.results[0];
 
-    res.json(movies);
+          return {
+            id: tmdbMovie?.id || movie.title,
+            title: movie.title,
+            overview: movie.overview,
+            poster_path: tmdbMovie?.poster_path || null,
+            vote_average: tmdbMovie?.vote_average || null,
+            release_date: tmdbMovie?.release_date || null,
+          };
+        } catch {
+          return {
+            id: movie.title,
+            title: movie.title,
+            overview: movie.overview,
+            poster_path: null,
+            vote_average: null,
+            release_date: null,
+          };
+        }
+      })
+    );
+
+    res.json({ results: enrichedMovies });
   } catch (err) {
-    console.error("AI ERROR:", err.message);
-    res.json([]); // ALWAYS return array
+    console.error("AI recommend error:", err);
+    res.status(500).json({ results: [] });
   }
 });
 

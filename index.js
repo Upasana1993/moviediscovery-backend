@@ -76,8 +76,8 @@ app.post("/recommend", async (req, res) => {
   try {
     const aiPrompt = `
 Suggest 5 movies.
-Return ONLY valid JSON array.
-Each item:
+Return ONLY a valid JSON array.
+Each item must have:
 - title
 - overview
 

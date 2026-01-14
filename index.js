@@ -44,19 +44,25 @@ async function getWatchProviders(movieId) {
   }
 }
 
+/* ---------------- FIND BEST TMDB MATCH ---------------- */
+async function findBestTMDBMovie(title) {
+  const res = await TMDB.get("/search/movie", {
+    params: { query: title },
+  });
+
+  if (!res.data.results?.length) return null;
+
+  // pick highest popularity + vote_count
+  return res.data.results.sort(
+    (a, b) =>
+      b.popularity + b.vote_count - (a.popularity + a.vote_count)
+  )[0];
+}
+
 /* ---------------- ENRICH MOVIE ---------------- */
-async function enrichMovie(tmdbMovie, fallback) {
-  if (!tmdbMovie) {
-    return {
-      id: fallback.title,
-      title: fallback.title,
-      overview: fallback.overview,
-      poster: null,
-      rating: null,
-      release_date: null,
-      providers: {},
-    };
-  }
+async function enrichMovie(movie) {
+  const tmdbMovie = await findBestTMDBMovie(movie.title || movie.name);
+  if (!tmdbMovie) return null;
 
   const providers = await getWatchProviders(tmdbMovie.id);
 
@@ -64,7 +70,9 @@ async function enrichMovie(tmdbMovie, fallback) {
     id: tmdbMovie.id,
     title: tmdbMovie.title,
     overview: tmdbMovie.overview,
-    poster: tmdbMovie.poster_path ? IMG + tmdbMovie.poster_path : null,
+    poster: tmdbMovie.poster_path
+      ? IMG + tmdbMovie.poster_path
+      : null,
     rating: tmdbMovie.vote_average,
     release_date: tmdbMovie.release_date,
     providers,
@@ -74,39 +82,33 @@ async function enrichMovie(tmdbMovie, fallback) {
 /* ---------------- AI RECOMMEND ---------------- */
 app.post("/recommend", async (req, res) => {
   try {
-    const aiPrompt = `
+    const aiResponse = await openai.responses.create({
+      model: "gpt-4o-mini",
+      input: `
 Suggest 5 movies.
-Return ONLY a valid JSON array.
-Each item must have:
+Return ONLY valid JSON array.
+Each item:
 - title
 - overview
 
 Request: ${req.body.prompt}
-`;
-
-    const aiResponse = await openai.responses.create({
-      model: "gpt-4o-mini",
-      input: aiPrompt,
+`,
     });
 
     const raw =
       aiResponse.output?.[0]?.content?.[0]?.text || "";
 
-    const clean = raw.replace(/```json|```/g, "").trim();
-    const aiMovies = JSON.parse(clean);
-
-    const results = await Promise.all(
-      aiMovies.map(async (movie) => {
-        const tmdbRes = await TMDB.get("/search/movie", {
-          params: { query: movie.title },
-        });
-        return enrichMovie(tmdbRes.data.results[0], movie);
-      })
+    const aiMovies = JSON.parse(
+      raw.replace(/```json|```/g, "").trim()
     );
+
+    const results = (
+      await Promise.all(aiMovies.map(enrichMovie))
+    ).filter(Boolean);
 
     res.json({ results });
   } catch (e) {
-    console.error("AI error:", e.message);
+    console.error(e);
     res.status(500).json({ results: [] });
   }
 });
@@ -114,22 +116,19 @@ Request: ${req.body.prompt}
 /* ---------------- TRENDING ---------------- */
 app.get("/trending", async (_, res) => {
   const data = await TMDB.get("/trending/movie/week");
-  const enriched = await Promise.all(
-    data.data.results.slice(0, 10).map((m) => enrichMovie(m, m))
+  const results = await Promise.all(
+    data.data.results.slice(0, 10).map(enrichMovie)
   );
-  res.json(enriched);
+  res.json(results.filter(Boolean));
 });
 
 /* ---------------- LATEST ---------------- */
 app.get("/latest", async (_, res) => {
   const data = await TMDB.get("/movie/now_playing");
-  const enriched = await Promise.all(
-    data.data.results.slice(0, 10).map((m) => enrichMovie(m, m))
+  const results = await Promise.all(
+    data.data.results.slice(0, 10).map(enrichMovie)
   );
-  res.json(enriched);
+  res.json(results.filter(Boolean));
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () =>
-  console.log("Backend running on port", PORT)
-);
+app.listen(process.env.PORT || 5000);

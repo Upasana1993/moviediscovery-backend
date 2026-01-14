@@ -20,13 +20,64 @@ const TMDB = axios.create({
   },
 });
 
+const IMG = "https://image.tmdb.org/t/p/w500";
+
+/* ---------------- WATCH PROVIDERS ---------------- */
+async function getWatchProviders(movieId) {
+  try {
+    const res = await TMDB.get(`/movie/${movieId}/watch/providers`);
+    const india = res.data.results?.IN || {};
+
+    const all = [
+      ...(india.flatrate || []),
+      ...(india.buy || []),
+      ...(india.rent || []),
+    ].map((p) => p.provider_name.toLowerCase());
+
+    return {
+      netflix: all.includes("netflix"),
+      prime: all.includes("amazon prime video"),
+      bookmyshow: all.includes("bookmyshow"),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/* ---------------- ENRICH MOVIE ---------------- */
+async function enrichMovie(tmdbMovie, fallback) {
+  if (!tmdbMovie) {
+    return {
+      id: fallback.title,
+      title: fallback.title,
+      overview: fallback.overview,
+      poster: null,
+      rating: null,
+      release_date: null,
+      providers: {},
+    };
+  }
+
+  const providers = await getWatchProviders(tmdbMovie.id);
+
+  return {
+    id: tmdbMovie.id,
+    title: tmdbMovie.title,
+    overview: tmdbMovie.overview,
+    poster: tmdbMovie.poster_path ? IMG + tmdbMovie.poster_path : null,
+    rating: tmdbMovie.vote_average,
+    release_date: tmdbMovie.release_date,
+    providers,
+  };
+}
+
 /* ---------------- AI RECOMMEND ---------------- */
 app.post("/recommend", async (req, res) => {
   try {
     const aiPrompt = `
-Suggest 5 movies for this request.
-Return ONLY a JSON array.
-Each item must contain:
+Suggest 5 movies.
+Return ONLY valid JSON array.
+Each item:
 - title
 - overview
 
@@ -38,50 +89,24 @@ Request: ${req.body.prompt}
       input: aiPrompt,
     });
 
-    const rawText =
+    const raw =
       aiResponse.output?.[0]?.content?.[0]?.text || "";
 
-    const cleanJson = rawText
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
+    const clean = raw.replace(/```json|```/g, "").trim();
+    const aiMovies = JSON.parse(clean);
 
-    const aiMovies = JSON.parse(cleanJson);
-
-    // enrich via TMDB
-    const enriched = await Promise.all(
+    const results = await Promise.all(
       aiMovies.map(async (movie) => {
-        try {
-          const tmdbRes = await TMDB.get("/search/movie", {
-            params: { query: movie.title },
-          });
-
-          const tmdbMovie = tmdbRes.data.results[0];
-
-          return {
-            id: tmdbMovie?.id || movie.title,
-            title: movie.title,
-            overview: movie.overview,
-            poster_path: tmdbMovie?.poster_path || null,
-            vote_average: tmdbMovie?.vote_average || null,
-            release_date: tmdbMovie?.release_date || null,
-          };
-        } catch {
-          return {
-            id: movie.title,
-            title: movie.title,
-            overview: movie.overview,
-            poster_path: null,
-            vote_average: null,
-            release_date: null,
-          };
-        }
+        const tmdbRes = await TMDB.get("/search/movie", {
+          params: { query: movie.title },
+        });
+        return enrichMovie(tmdbRes.data.results[0], movie);
       })
     );
 
-    res.json({ results: enriched });
-  } catch (err) {
-    console.error("AI recommend error:", err.message);
+    res.json({ results });
+  } catch (e) {
+    console.error("AI error:", e.message);
     res.status(500).json({ results: [] });
   }
 });
@@ -89,17 +114,22 @@ Request: ${req.body.prompt}
 /* ---------------- TRENDING ---------------- */
 app.get("/trending", async (_, res) => {
   const data = await TMDB.get("/trending/movie/week");
-  res.json(data.data.results.slice(0, 10));
+  const enriched = await Promise.all(
+    data.data.results.slice(0, 10).map((m) => enrichMovie(m, m))
+  );
+  res.json(enriched);
 });
 
 /* ---------------- LATEST ---------------- */
 app.get("/latest", async (_, res) => {
   const data = await TMDB.get("/movie/now_playing");
-  res.json(data.data.results.slice(0, 10));
+  const enriched = await Promise.all(
+    data.data.results.slice(0, 10).map((m) => enrichMovie(m, m))
+  );
+  res.json(enriched);
 });
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () =>
   console.log("Backend running on port", PORT)
 );
-

@@ -85,7 +85,7 @@ app.post("/recommend", async (req, res) => {
     const aiResponse = await openai.responses.create({
       model: "gpt-4o-mini",
       input: `
-Suggest 5 movies.
+Suggest 8 movies.
 Return ONLY valid JSON array.
 Each item:
 - title
